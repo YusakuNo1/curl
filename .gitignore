@@ -2,6 +2,9 @@
 #
 # SPDX-License-Identifier: curl
 
+# PugetVoice
+build-puget-voice-macos-arm64/
+
 *.asc
 *.dll
 *.exe
