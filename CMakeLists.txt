@@ -68,7 +68,7 @@ project(CURL
 
 # CMake does not recognize some targets accurately. Touch up configuration manually as a workaround.
 if(WINDOWS_STORE AND MINGW)  # MinGW UWP build
-  # CMake (as of v3.31.2) gets confused and applies the MSVC rc.exe command-line
+  # CMake (as of 3.31.2) gets confused and applies the MSVC rc.exe command-line
   # template to windres. Reset it to the windres template as in 'Modules/Platform/Windows-windres.cmake':
   set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> -O coff <DEFINES> <INCLUDES> <FLAGS> <SOURCE> <OBJECT>")
 elseif(DOS AND CMAKE_C_COMPILER_ID STREQUAL "GNU")  # DJGPP
@@ -230,7 +230,7 @@ if(WIN32)
       if(MINGW64_VERSION)
         message(STATUS "Found MINGW64_VERSION=${MINGW64_VERSION}")
         if(MINGW64_VERSION VERSION_LESS 3.0)
-          message(FATAL_ERROR "mingw-w64 3.0 or upper is required")
+          message(FATAL_ERROR "mingw-w64 3.0 or greater required")
         endif()
       endif()
     endif()
@@ -498,8 +498,6 @@ option(CURL_DISABLE_SHA512_256 "Disable SHA-512/256 hash algorithm" OFF)
 mark_as_advanced(CURL_DISABLE_SHA512_256)
 option(CURL_DISABLE_SHUFFLE_DNS "Disable shuffle DNS feature" OFF)
 mark_as_advanced(CURL_DISABLE_SHUFFLE_DNS)
-option(CURL_ENABLE_SMB "Enable SMB" OFF)
-mark_as_advanced(CURL_ENABLE_SMB)
 option(CURL_DISABLE_SMTP "Disable SMTP" OFF)
 mark_as_advanced(CURL_DISABLE_SMTP)
 option(CURL_DISABLE_SOCKETPAIR "Disable use of socketpair for curl_multi_poll()" OFF)
@@ -531,28 +529,6 @@ if(CURL_DISABLE_HTTP)
   set(CURL_DISABLE_HSTS ON)
   set(CURL_DISABLE_IPFS ON)
   set(CURL_DISABLE_RTSP ON)
-  set(CURL_DISABLE_WEBSOCKETS ON)
-endif()
-
-# Corresponds to HTTP_ONLY in lib/curl_setup.h
-option(HTTP_ONLY "Disable all protocols except HTTP (This overrides all CURL_DISABLE_* options)" OFF)
-mark_as_advanced(HTTP_ONLY)
-
-if(HTTP_ONLY)
-  set(CURL_DISABLE_DICT ON)
-  set(CURL_DISABLE_FILE ON)
-  set(CURL_DISABLE_FTP ON)
-  set(CURL_DISABLE_GOPHER ON)
-  set(CURL_DISABLE_IMAP ON)
-  set(CURL_DISABLE_IPFS ON)
-  set(CURL_DISABLE_LDAP ON)
-  set(CURL_DISABLE_LDAPS ON)
-  set(CURL_DISABLE_MQTT ON)
-  set(CURL_DISABLE_POP3 ON)
-  set(CURL_DISABLE_RTSP ON)
-  set(CURL_DISABLE_SMTP ON)
-  set(CURL_DISABLE_TELNET ON)
-  set(CURL_DISABLE_TFTP ON)
   set(CURL_DISABLE_WEBSOCKETS ON)
 endif()
 
@@ -639,12 +615,12 @@ elseif(APPLE)
   set(HAVE_WRITABLE_ARGV 1)
   set(HAVE_SENDMMSG 0)
 endif()
+if(DOS OR AMIGA)
+  set(HAVE_TIME_T_UNSIGNED 1)  # Pre-fill
+endif()
 
 if(AMIGA)
   set(HAVE_GETADDRINFO 0)  # Breaks the build when detected and used.
-endif()
-if(DOS OR AMIGA)
-  set(HAVE_TIME_T_UNSIGNED 1)
 endif()
 
 if(NOT WIN32)
@@ -832,6 +808,10 @@ if(_use_core_foundation_and_core_services)
   list(APPEND CURL_LIBS "-framework CoreServices")
 endif()
 
+if(NOT DEFINED _curl_stdlib_cxx)
+  set(_curl_stdlib_cxx "stdc++")
+endif()
+
 if(CURL_USE_OPENSSL)
   find_package(OpenSSL REQUIRED)
   set(_ssl_enabled ON)
@@ -870,9 +850,9 @@ if(CURL_USE_OPENSSL)
         message(WARNING "AWS-LC/BoringSSL requires POSIX Threads.")
       endif()
     endif()
-    if(OPENSSL_USE_STATIC_LIBS AND CMAKE_C_COMPILER_ID MATCHES "Clang")
-      list(APPEND CURL_LIBS "stdc++")
-      list(APPEND CMAKE_REQUIRED_LIBRARIES "stdc++")
+    if(OPENSSL_USE_STATIC_LIBS AND
+       (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID MATCHES "Clang"))
+      list(APPEND CURL_LIBS "${_curl_stdlib_cxx}")
     endif()
   endif()
 
@@ -895,7 +875,7 @@ endif()
 if(CURL_USE_MBEDTLS)
   find_package(MbedTLS MODULE REQUIRED)
   if(MBEDTLS_VERSION VERSION_LESS 3.2.0)
-    message(FATAL_ERROR "mbedTLS v3.2.0 or newer is required.")
+    message(FATAL_ERROR "mbedTLS 3.2.0 or greater required")
   endif()
   set(_ssl_enabled ON)
   set(USE_MBEDTLS ON)
@@ -929,7 +909,7 @@ if(CURL_USE_WOLFSSL)
   set(_curl_ca_bundle_supported TRUE)
 
   if(USE_OPENSSL AND WOLFSSL_VERSION VERSION_LESS 5.7.6)
-    message(FATAL_ERROR "wolfSSL 5.7.6 or newer is required to coexist with OpenSSL.")
+    message(FATAL_ERROR "wolfSSL 5.7.6 or greater required to coexist with OpenSSL")
   endif()
 
   set_property(DIRECTORY APPEND PROPERTY COMPILE_DEFINITIONS "WOLFSSL_OPTIONS_IGNORE_SYS")
@@ -966,7 +946,7 @@ if(CURL_USE_RUSTLS)
     endif()
   endif()
   if(NOT HAVE_RUSTLS_SUPPORTED_HPKE)
-    message(FATAL_ERROR "rustls-ffi library does not provide rustls_supported_hpke function. Required version is 0.15 or newer.")
+    message(FATAL_ERROR "rustls-ffi library does not provide rustls_supported_hpke function. Required version is 0.15 or greater.")
   endif()
 
   if(CURL_DEFAULT_SSL_BACKEND AND CURL_DEFAULT_SSL_BACKEND STREQUAL "rustls")
@@ -1005,7 +985,7 @@ if(ZSTD_FOUND)
     set(HAVE_ZSTD ON)
     list(APPEND CURL_LIBS CURL::zstd)
   else()
-    message(WARNING "zstd v1.0.0 or newer is required, disabling zstd support.")
+    message(WARNING "zstd 1.0.0 or greater required, disabling zstd support")
   endif()
 endif()
 
@@ -1020,6 +1000,10 @@ macro(curl_openssl_check_exists)
     if(WIN32)
       list(APPEND CMAKE_REQUIRED_LIBRARIES "bcrypt")  # for OpenSSL/LibreSSL BCryptGenRandom()
     endif()
+    if((HAVE_AWSLC OR HAVE_BORINGSSL) AND OPENSSL_USE_STATIC_LIBS AND
+       (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID MATCHES "Clang"))
+      list(APPEND CMAKE_REQUIRED_LIBRARIES "${_curl_stdlib_cxx}")
+    endif()
   endif()
   if(USE_WOLFSSL)
     list(APPEND CMAKE_REQUIRED_LIBRARIES CURL::wolfssl)
@@ -1027,7 +1011,7 @@ macro(curl_openssl_check_exists)
     if(HAVE_LIBZ)
       list(APPEND CMAKE_REQUIRED_LIBRARIES ZLIB::ZLIB)  # Public wolfSSL headers also require zlib headers
     endif()
-    list(APPEND CMAKE_REQUIRED_DEFINITIONS "-DHAVE_UINTPTR_T")  # to pull in stdint.h (as of wolfSSL v5.5.4)
+    list(APPEND CMAKE_REQUIRED_DEFINITIONS "-DHAVE_UINTPTR_T")  # to pull in stdint.h (as of wolfSSL 5.5.4)
   endif()
   if(WIN32)
     list(APPEND CMAKE_REQUIRED_LIBRARIES "ws2_32" "crypt32")  # for OpenSSL/wolfSSL
@@ -1147,7 +1131,7 @@ if(USE_NGTCP2)
     elseif(OPENSSL_VERSION VERSION_GREATER_EQUAL 3.5.0)
       find_package(NGTCP2 MODULE REQUIRED COMPONENTS "ossl")
       if(NGTCP2_VERSION VERSION_LESS 1.12.0)
-        message(FATAL_ERROR "ngtcp2 1.12.0 or upper required for OpenSSL")
+        message(FATAL_ERROR "ngtcp2 1.12.0 or greater required for OpenSSL")
       endif()
       set(OPENSSL_QUIC_API2 1)
     elseif(HAVE_LIBRESSL)
@@ -1336,6 +1320,9 @@ option(CURL_USE_GSASL "Use libgsasl" OFF)
 mark_as_advanced(CURL_USE_GSASL)
 if(CURL_USE_GSASL)
   find_package(Libgsasl MODULE REQUIRED)
+  if(LIBGSASL_VERSION VERSION_LESS 1.6.0)
+    message(FATAL_ERROR "libgsasl 1.6.0 or greater required")
+  endif()
   list(APPEND CURL_LIBS CURL::libgsasl)
   set(USE_GSASL ON)
 endif()
@@ -1564,6 +1551,7 @@ check_include_file_concat_curl("net/if.h"         HAVE_NET_IF_H)  # sys/select.h
 check_include_file_concat_curl("netdb.h"          HAVE_NETDB_H)
 check_include_file_concat_curl("netinet/in.h"     HAVE_NETINET_IN_H)
 check_include_file("netinet/in6.h"    HAVE_NETINET_IN6_H)
+check_include_file("netinet/ip.h"     HAVE_NETINET_IP_H)
 check_include_file_concat_curl("netinet/tcp.h"    HAVE_NETINET_TCP_H)  # sys/types.h (e.g. Cygwin) netinet/in.h
 check_include_file_concat_curl("netinet/udp.h"    HAVE_NETINET_UDP_H)  # sys/types.h (e.g. Cygwin)
 check_include_file("poll.h"           HAVE_POLL_H)
@@ -1678,15 +1666,17 @@ check_function_exists("setrlimit"     HAVE_SETRLIMIT)
 if(APPLE)
   check_function_exists("mach_absolute_time" HAVE_MACH_ABSOLUTE_TIME)
 else()
-  # Apple platforms do not offer pipe2(), but the iPhone Simulator-specific
+  # Apple SDK <27 do not offer pipe2(), but the iPhone Simulator-specific
   # /usr/lib/system/libsystem_sim_kernel.dylib exports it. To avoid false
   # detection, omit this feature check for Apple targets.
+  # For 27+, detection is done in-source.
   check_function_exists("pipe2"         HAVE_PIPE2)
 endif()
 
 if(NOT WIN32)
   check_include_file("dirent.h"         HAVE_DIRENT_H)
 
+  check_function_exists("fchmod"          HAVE_FCHMOD)
   check_function_exists("gettimeofday"    HAVE_GETTIMEOFDAY)  # sys/time.h
   check_function_exists("if_nametoindex"  HAVE_IF_NAMETOINDEX)  # net/if.h
   check_function_exists("realpath"        HAVE_REALPATH)
@@ -1815,16 +1805,7 @@ if(NOT WIN32 AND NOT CMAKE_CROSSCOMPILING)
     }" HAVE_WRITABLE_ARGV)
 endif()
 
-if(NOT CMAKE_CROSSCOMPILING)
-  include(CheckCSourceRuns)
-  check_c_source_runs("
-    #include <time.h>
-    int main(void)
-    {
-      time_t t = -1;
-      return t < 0;
-    }" HAVE_TIME_T_UNSIGNED)
-endif()
+curl_internal_test(HAVE_TIME_T_UNSIGNED)
 
 curl_internal_test(HAVE_GLIBC_STRERROR_R)
 curl_internal_test(HAVE_POSIX_STRERROR_R)
@@ -2018,10 +1999,6 @@ curl_add_if("POP3"          NOT CURL_DISABLE_POP3)
 curl_add_if("POP3S"         NOT CURL_DISABLE_POP3 AND _ssl_enabled)
 curl_add_if("IMAP"          NOT CURL_DISABLE_IMAP)
 curl_add_if("IMAPS"         NOT CURL_DISABLE_IMAP AND _ssl_enabled)
-curl_add_if("SMB"           CURL_ENABLE_SMB AND
-                            _use_curl_ntlm_core AND (SIZEOF_CURL_OFF_T GREATER 4))
-curl_add_if("SMBS"          CURL_ENABLE_SMB AND _ssl_enabled AND
-                            _use_curl_ntlm_core AND (SIZEOF_CURL_OFF_T GREATER 4))
 curl_add_if("SMTP"          NOT CURL_DISABLE_SMTP)
 curl_add_if("SMTPS"         NOT CURL_DISABLE_SMTP AND _ssl_enabled)
 curl_add_if("SCP"           USE_LIBSSH2 OR USE_LIBSSH)

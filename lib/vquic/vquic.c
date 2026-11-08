@@ -33,6 +33,9 @@
 #ifdef HAVE_NETINET_UDP_H
 #include <netinet/udp.h>
 #endif
+#ifdef HAVE_NETINET_IP_H
+#include <netinet/ip.h>
+#endif
 
 #ifdef USE_NGHTTP3
 #include <nghttp3/nghttp3.h>
@@ -47,7 +50,8 @@
 
 #include "bufq.h"
 #include "curlx/dynbuf.h"
-#include "curlx/fopen.h"
+#include "curlx/win32-fopen.h"
+#include "connect.h"
 #include "cfilters.h"
 #include "vdns/cf-dns.h"
 #include "vquic/cf-ngtcp2.h"
@@ -66,6 +70,8 @@
 #define NW_SEND_CHUNKS    1
 
 #ifdef HAVE_APPLE_MSG_X
+
+/* this is `struct msghdr` with an additional field at the end */
 struct msghdr_x {
   void *msg_name;           /* optional address */
   socklen_t msg_namelen;    /* size of address */
@@ -552,31 +558,95 @@ static size_t vquic_msghdr_get_udp_gro(struct msghdr *msg)
       break;
     }
   }
-#endif
+#endif /* linux && UDP_GRO */
   (void)msg;
 
   return (size_t)gso_size;
 }
+#endif /* (HAVE_SENDMMSG || HAVE_SENDMSG) && !HAVE_APPLE_MSG_X */
+
+/* IP_RECVTOS was added in the macOS 10.13 SDK */
+#if (defined(HAVE_SENDMMSG) || defined(HAVE_SENDMSG) || \
+  defined(HAVE_APPLE_MSG_X)) && \
+  ((defined(__APPLE__) && defined(IP_RECVTOS)) || \
+   (!defined(__APPLE__) && defined(IP_TOS))) && \
+  defined(IPTOS_ECN_MASK)
+static uint8_t vquic_msghdr_get_ecn(struct msghdr *msg, int family)
+{
+  struct cmsghdr *cmsg;
+  switch(family) {
+  case AF_INET:
+  /* Workaround musl CMSG_NXTHDR issue */
+#if defined(__clang__) && !defined(__GLIBC__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wsign-compare"
+#pragma clang diagnostic ignored "-Wcast-align"
 #endif
+    for(cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
+#if defined(__clang__) && !defined(__GLIBC__)
+#pragma clang diagnostic pop
+#endif
+      if(cmsg->cmsg_level == IPPROTO_IP &&
+#ifdef __APPLE__
+          cmsg->cmsg_type == IP_RECVTOS
+#else
+          cmsg->cmsg_type == IP_TOS
+#endif
+          && cmsg->cmsg_len) {
+        return *(uint8_t *)(CMSG_DATA(cmsg)) & IPTOS_ECN_MASK;
+      }
+    }
+    break;
+  case AF_INET6:
+  /* Workaround musl CMSG_NXTHDR issue */
+#if defined(__clang__) && !defined(__GLIBC__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wsign-compare"
+#pragma clang diagnostic ignored "-Wcast-align"
+#endif
+    for(cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
+#if defined(__clang__) && !defined(__GLIBC__)
+#pragma clang diagnostic pop
+#endif
+      if(cmsg->cmsg_level == IPPROTO_IPV6 && cmsg->cmsg_type == IPV6_TCLASS &&
+         cmsg->cmsg_len) {
+        unsigned int tos;
+
+        memcpy(&tos, CMSG_DATA(cmsg), sizeof(int));
+
+        return (uint8_t)(tos & IPTOS_ECN_MASK);
+      }
+    }
+    break;
+  }
+  return 0;
+}
+#else
+#define vquic_msghdr_get_ecn(a, b)      0
+#endif /* HAVE_SENDMMSG || HAVE_SENDMSG || HAVE_APPLE_MSG_X ... */
 
 #ifdef HAVE_SENDMMSG
+
 static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
                                  struct Curl_easy *data,
                                  struct cf_quic_ctx *qctx,
                                  size_t max_pkts,
-                                 Curl_vquic_recv_pkts_cb *recv_cb, void *userp)
+                                 Curl_vquic_recv_pkts_cb *recv_cb, void *userp,
+                                 size_t *pnread)
 {
 #if defined(__linux__) && defined(UDP_GRO)
 #define MMSG_NUM  16
 #define UDP_GRO_CNT_MAX  64
+#define CMSG_PER_MSG_SIZE    (2 * CMSG_SPACE(sizeof(int)))
 #else
 #define MMSG_NUM  64
 #define UDP_GRO_CNT_MAX  1
+#define CMSG_PER_MSG_SIZE    CMSG_SPACE(sizeof(int))
 #endif
 #define MSG_BUF_SIZE  (UDP_GRO_CNT_MAX * 1500)
   struct iovec msg_iov[MMSG_NUM];
   struct mmsghdr mmsg[MMSG_NUM];
-  uint8_t msg_ctrl[MMSG_NUM * CMSG_SPACE(sizeof(int))];
+  uint8_t msg_ctrl[MMSG_NUM * CMSG_PER_MSG_SIZE];
   struct sockaddr_storage remote_addr[MMSG_NUM];
   size_t total_nread = 0, pkts = 0;
 #ifdef CURLVERBOSE
@@ -588,6 +658,7 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
   size_t gso_size;
   char *sockbuf = NULL;
   uint8_t (*bufs)[MSG_BUF_SIZE] = NULL;
+  uint8_t ecn = 0;
 
   DEBUGASSERT(max_pkts > 0);
   result = Curl_multi_xfer_sockbuf_borrow(data, MMSG_NUM * MSG_BUF_SIZE,
@@ -607,8 +678,8 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
       mmsg[i].msg_hdr.msg_iovlen = 1;
       mmsg[i].msg_hdr.msg_name = &remote_addr[i];
       mmsg[i].msg_hdr.msg_namelen = sizeof(remote_addr[i]);
-      mmsg[i].msg_hdr.msg_control = &msg_ctrl[i * CMSG_SPACE(sizeof(int))];
-      mmsg[i].msg_hdr.msg_controllen = CMSG_SPACE(sizeof(int));
+      mmsg[i].msg_hdr.msg_control = &msg_ctrl[i * CMSG_PER_MSG_SIZE];
+      mmsg[i].msg_hdr.msg_controllen = CMSG_PER_MSG_SIZE;
     }
 
     while((mcount = recvmmsg(qctx->sockfd, mmsg, n, 0, NULL)) == -1 &&
@@ -643,13 +714,14 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
       }
       total_nread += mmsg[i].msg_len;
 
+      ecn = vquic_msghdr_get_ecn(&mmsg[i].msg_hdr, remote_addr[i].ss_family);
       gso_size = vquic_msghdr_get_udp_gro(&mmsg[i].msg_hdr);
       if(gso_size == 0)
         gso_size = mmsg[i].msg_len;
 
       result = recv_cb(bufs[i], mmsg[i].msg_len, gso_size,
                        mmsg[i].msg_hdr.msg_name,
-                       mmsg[i].msg_hdr.msg_namelen, 0, userp);
+                       mmsg[i].msg_hdr.msg_namelen, ecn, userp);
       if(result)
         goto out;
       pkts += (mmsg[i].msg_len + gso_size - 1) / gso_size;
@@ -662,6 +734,7 @@ out:
                 "vquic_recvmmsg(len=%zu, packets=%zu, calls=%zu) -> %d",
                 total_nread, pkts, calls, (int)result);
   Curl_multi_xfer_sockbuf_release(data, sockbuf);
+  *pnread = total_nread;
   return result;
 }
 
@@ -672,13 +745,14 @@ static CURLcode recvmsg_x_packets(struct Curl_cfilter *cf,
                                   struct cf_quic_ctx *qctx,
                                   size_t max_pkts,
                                   Curl_vquic_recv_pkts_cb *recv_cb,
-                                  void *userp)
+                                  void *userp, size_t *pnread)
 {
 #define MSG_X_NUM  64
 #define MSG_BUF_SIZE  (2048)
+#define CMSG_PER_MSG_SIZE     CMSG_SPACE(sizeof(int))
   struct iovec msg_iov[MSG_X_NUM];
   struct msghdr_x mmsg[MSG_X_NUM];
-  uint8_t msg_ctrl[MSG_X_NUM * CMSG_SPACE(sizeof(int))];
+  uint8_t msg_ctrl[MSG_X_NUM * CMSG_PER_MSG_SIZE];
   struct sockaddr_storage remote_addr[MSG_X_NUM];
   size_t total_nread = 0, pkts = 0;
 #ifdef CURLVERBOSE
@@ -690,6 +764,7 @@ static CURLcode recvmsg_x_packets(struct Curl_cfilter *cf,
   size_t gso_size;
   char *sockbuf = NULL;
   uint8_t (*bufs)[MSG_BUF_SIZE] = NULL;
+  uint8_t ecn = 0;
 
   DEBUGASSERT(max_pkts > 0);
   result = Curl_multi_xfer_sockbuf_borrow(data, MSG_X_NUM * MSG_BUF_SIZE,
@@ -709,8 +784,8 @@ static CURLcode recvmsg_x_packets(struct Curl_cfilter *cf,
       mmsg[i].msg_iovlen = 1;
       mmsg[i].msg_name = &remote_addr[i];
       mmsg[i].msg_namelen = sizeof(remote_addr[i]);
-      mmsg[i].msg_control = &msg_ctrl[i * CMSG_SPACE(sizeof(int))];
-      mmsg[i].msg_controllen = CMSG_SPACE(sizeof(int));
+      mmsg[i].msg_control = &msg_ctrl[i * CMSG_PER_MSG_SIZE];
+      mmsg[i].msg_controllen = CMSG_PER_MSG_SIZE;
     }
 
 #if defined(CURL_HAVE_DIAG) && defined(__APPLE__)
@@ -751,11 +826,13 @@ static CURLcode recvmsg_x_packets(struct Curl_cfilter *cf,
         continue;
       }
       total_nread += mmsg[i].msg_datalen;
+      ecn = vquic_msghdr_get_ecn((struct msghdr *)&mmsg[i],
+                                 remote_addr[i].ss_family);
       gso_size = mmsg[i].msg_datalen;
 
       result = recv_cb(bufs[i], mmsg[i].msg_datalen, gso_size,
                        mmsg[i].msg_name,
-                       mmsg[i].msg_namelen, 0, userp);
+                       mmsg[i].msg_namelen, ecn, userp);
       if(result)
         goto out;
       pkts += (mmsg[i].msg_datalen + gso_size - 1) / gso_size;
@@ -768,6 +845,7 @@ out:
                 "vquic_recvmsg_x(len=%zu, packets=%zu, calls=%zu) -> %d",
                 total_nread, pkts, calls, (int)result);
   Curl_multi_xfer_sockbuf_release(data, sockbuf);
+  *pnread = total_nread;
   return result;
 }
 
@@ -776,8 +854,10 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
                                 struct Curl_easy *data,
                                 struct cf_quic_ctx *qctx,
                                 size_t max_pkts,
-                                Curl_vquic_recv_pkts_cb *recv_cb, void *userp)
+                                Curl_vquic_recv_pkts_cb *recv_cb, void *userp,
+                                size_t *pnread)
 {
+#define CMSG_PER_MSG_SIZE    CMSG_SPACE(sizeof(int))
   struct iovec msg_iov;
   struct msghdr msg;
   uint8_t buf[64 * 1024];
@@ -787,8 +867,9 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
   size_t nread;
   char errstr[STRERROR_LEN];
   CURLcode result = CURLE_OK;
-  uint8_t msg_ctrl[CMSG_SPACE(sizeof(int))];
+  uint8_t msg_ctrl[CMSG_PER_MSG_SIZE];
   size_t gso_size;
+  uint8_t ecn = 0;
 
   DEBUGASSERT(max_pkts > 0);
   for(pkts = 0, total_nread = 0, calls = 0; pkts < max_pkts;) {
@@ -802,7 +883,7 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
     msg.msg_control = msg_ctrl;
     msg.msg_name = &remote_addr;
     msg.msg_namelen = sizeof(remote_addr);
-    msg.msg_controllen = sizeof(msg_ctrl);
+    msg.msg_controllen = CMSG_PER_MSG_SIZE;
 
     while((rc = recvmsg(qctx->sockfd, &msg, 0)) == -1 &&
           (SOCKERRNO == SOCKEINTR || SOCKERRNO == SOCKEMSGSIZE))
@@ -835,12 +916,13 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
       continue;
     }
 
+    ecn = vquic_msghdr_get_ecn(&msg, remote_addr.ss_family);
     gso_size = vquic_msghdr_get_udp_gro(&msg);
     if(gso_size == 0)
       gso_size = nread;
 
     result = recv_cb(buf, nread, gso_size,
-                     msg.msg_name, msg.msg_namelen, 0, userp);
+                     msg.msg_name, msg.msg_namelen, ecn, userp);
     if(result)
       goto out;
     pkts += (nread + gso_size - 1) / gso_size;
@@ -851,6 +933,7 @@ out:
     CURL_TRC_CF(data, cf,
                 "vquic_recvmsg(len=%zu, packets=%zu, calls=%zu) -> %d",
                 total_nread, pkts, calls, (int)result);
+  *pnread = total_nread;
   return result;
 }
 
@@ -859,7 +942,8 @@ static CURLcode recvfrom_packets(struct Curl_cfilter *cf,
                                  struct Curl_easy *data,
                                  struct cf_quic_ctx *qctx,
                                  size_t max_pkts,
-                                 Curl_vquic_recv_pkts_cb *recv_cb, void *userp)
+                                 Curl_vquic_recv_pkts_cb *recv_cb, void *userp,
+                                 size_t *pnread)
 {
   uint8_t buf[64 * 1024];
   int bufsize = (int)sizeof(buf);
@@ -916,6 +1000,7 @@ out:
     CURL_TRC_CF(data, cf,
                 "vquic_recvfrom(len=%zu, packets=%zu, calls=%zu) -> %d",
                 total_nread, pkts, calls, (int)result);
+  *pnread = total_nread;
   return result;
 }
 #endif /* !HAVE_SENDMMSG && !HAVE_SENDMSG */
@@ -927,17 +1012,20 @@ CURLcode Curl_vquic_recv_packets(struct Curl_cfilter *cf,
                                  Curl_vquic_recv_pkts_cb *recv_cb, void *userp)
 {
   CURLcode result;
+  size_t nread = 0;
 #ifdef HAVE_SENDMMSG
-  result = recvmmsg_packets(cf, data, qctx, max_pkts, recv_cb, userp);
+  result = recvmmsg_packets(cf, data, qctx, max_pkts, recv_cb, userp, &nread);
 #elif defined(HAVE_APPLE_MSG_X)
-  result = recvmsg_x_packets(cf, data, qctx, max_pkts, recv_cb, userp);
+  result = recvmsg_x_packets(cf, data, qctx, max_pkts, recv_cb, userp,
+                             &nread);
 #elif defined(HAVE_SENDMSG)
-  result = recvmsg_packets(cf, data, qctx, max_pkts, recv_cb, userp);
+  result = recvmsg_packets(cf, data, qctx, max_pkts, recv_cb, userp, &nread);
 #else
-  result = recvfrom_packets(cf, data, qctx, max_pkts, recv_cb, userp);
+  result = recvfrom_packets(cf, data, qctx, max_pkts, recv_cb, userp, &nread);
 #endif
   if(!result) {
-    if(!qctx->got_first_byte) {
+    /* EAGAIN is no error, only count actual packets as a reply */
+    if(!qctx->got_first_byte && nread) {
       qctx->got_first_byte = TRUE;
       qctx->first_byte_at = qctx->last_op;
     }
@@ -980,9 +1068,10 @@ CURLcode Curl_qlogdir(struct Curl_easy *data,
     if(!result) {
       int qlogfd = curlx_open(curlx_dyn_ptr(&fname),
                               O_WRONLY | O_CREAT | CURL_O_BINARY,
-                              data->set.new_file_perms
 #ifdef _WIN32
-                              & (_S_IREAD | _S_IWRITE)
+                              data->set.new_file_perms & (_S_IREAD | _S_IWRITE)
+#else
+                              (mode_t)data->set.new_file_perms
 #endif
                               );
       if(qlogfd != -1)
@@ -1002,14 +1091,16 @@ CURLcode Curl_cf_quic_insert_after(struct Curl_cfilter *cf_at,
                                    struct Curl_peer *origin,
                                    struct Curl_peer *peer)
 {
+  struct Curl_cfilter *cf = NULL;
   CURLcode result;
 
   (void)data; /* not used in all cases and compilers are stupid */
 #if defined(USE_NGTCP2) && defined(USE_NGHTTP3)
-  result = Curl_cf_ngtcp2_insert_after(cf_at, origin, peer);
+  result = Curl_cf_ngtcp2_insert_after(cf_at, origin, peer, &cf);
 #elif defined(USE_QUICHE)
-  result = Curl_cf_quiche_insert_after(cf_at, origin, peer);
+  result = Curl_cf_quiche_insert_after(cf_at, origin, peer, &cf);
 #else
+  (void)cf)
   (void)cf_at;
   (void)origin;
   (void)peer;
@@ -1019,12 +1110,9 @@ CURLcode Curl_cf_quic_insert_after(struct Curl_cfilter *cf_at,
 #if defined(USE_HTTPSRR) && defined(USE_ECH)
   /* When using ECH, kick off the HTTPS-RR resolve */
   if(!result && (origin->scheme->family == CURLPROTO_HTTP) &&
-     CURLECH_ENABLED(data) &&
-     Curl_ssl_supports(data, SSLSUPP_ECH) &&
-     (data->set.tls_ech != CURLECH_GREASE) &&
-     !CURL_EASY_STR(data, STRING_ECH_CONFIG)) {
-    result = Curl_conn_dns_add_https_resolve(data, cf_at->conn,
-                                             cf_at->sockindex, origin);
+     Curl_ssl_need_httpsrr(cf)) {
+    result = Curl_conn_dns_add_https_resolve(data, cf->conn,
+                                             cf->sockindex, origin);
   }
 #endif /* USE_HTTPSRR && USE_ECH */
   return result;
@@ -1115,10 +1203,9 @@ CURLcode Curl_cf_h3_proxy_create(struct Curl_cfilter **pcf,
 #endif /* !CURL_DISABLE_PROXY && USE_PROXY_HTTP3 */
 
 CURLcode Curl_conn_may_http3(struct Curl_easy *data,
-                             const struct connectdata *conn,
-                             unsigned char transport)
+                             struct connectdata *conn)
 {
-  if(transport == TRNSPRT_UNIX) {
+  if(Curl_conn_get_first_peer(conn, FIRSTSOCKET)->unix_socket) {
     failf(data, "HTTP/3 cannot be used over UNIX domain sockets");
     return CURLE_QUIC_CONNECT_ERROR;
   }
@@ -1247,12 +1334,10 @@ struct nghttp3_mem *Curl_nghttp3_mem(void)
 #else /* CURL_DISABLE_HTTP || !USE_HTTP3 */
 
 CURLcode Curl_conn_may_http3(struct Curl_easy *data,
-                             const struct connectdata *conn,
-                             unsigned char transport)
+                             struct connectdata *conn)
 {
   (void)data;
   (void)conn;
-  (void)transport;
   DEBUGF(infof(data, "QUIC is not supported in this build"));
   return CURLE_NOT_BUILT_IN;
 }

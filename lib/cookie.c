@@ -448,29 +448,6 @@ static bool parse_first_pair(struct Curl_easy *data, struct Cookie *co,
   return TRUE;
 }
 
-static bool parse_flag(struct Curl_easy *data, struct Cookie *co,
-                       const struct CookieInfo *ci,
-                       struct Curl_str *name, bool secure)
-{
-  /*
-   * secure cookies are only allowed to be set when the connection is
-   * using a secure protocol, or when the cookie is being set by
-   * reading from file
-   */
-  if(curlx_str_casecompare(name, "secure")) {
-    if(secure || !ci->running)
-      co->secure = TRUE;
-    else {
-      infof(data, "skipped cookie because not 'secure'");
-      return FALSE;
-    }
-  }
-  else if(curlx_str_casecompare(name, "httponly"))
-    co->httponly = TRUE;
-
-  return TRUE;
-}
-
 static bool parse_domain(struct Curl_easy *data, struct Cookie *co,
                          struct Curl_str *cookie_domain,
                          struct Curl_str *val,
@@ -587,7 +564,6 @@ static void parse_expires(struct Cookie *co, struct Curl_str *val,
 static CURLcode
 parse_cookie_header(struct Curl_easy *data,
                     struct Cookie *co,
-                    const struct CookieInfo *ci,
                     bool *okay, /* if the cookie was fine */
                     const char *ptr, /* the header */
                     const char *domain, /* default domain */
@@ -611,7 +587,8 @@ parse_cookie_header(struct Curl_easy *data,
     struct Curl_str name;
 
     /* we have a <name>=<value> pair or a stand-alone word here */
-    if(!curlx_str_cspn(&ptr, &name, ";\t\r\n=")) {
+    int rc = curlx_str_cspn(&ptr, &name, ";\r\n=");
+    if(!rc || (rc == STRE_SHORT)) {
       struct Curl_str val;
       bool sep = FALSE;
       curlx_str_trimblanks(&name);
@@ -638,20 +615,32 @@ parse_cookie_header(struct Curl_easy *data,
         if(!parse_first_pair(data, co, cookie, &name, &val, sep))
           return CURLE_OK;
       }
-      else if(!sep) {
-        if(!parse_flag(data, co, ci, &name, secure_origin))
+
+      /* whether there's separator or not */
+      else if(curlx_str_casecompare(&name, "secure")) {
+        if(secure_origin)
+          co->secure = TRUE;
+        else {
+          infof(data, "skipped cookie because not 'secure'");
           return CURLE_OK;
+        }
       }
-      else if(curlx_str_casecompare(&name, "path"))
-        cookie[COOKIE_PATH] = val;
-      else if(curlx_str_casecompare(&name, "domain") && curlx_strlen(&val)) {
-        if(!parse_domain(data, co, &cookie[COOKIE_DOMAIN], &val, &domain))
-          return CURLE_OK;
+      else if(curlx_str_casecompare(&name, "httponly"))
+        co->httponly = TRUE;
+      else if(sep) {
+        /* only if a separating equals sign is present */
+        if(curlx_str_casecompare(&name, "path"))
+          cookie[COOKIE_PATH] = val;
+        else if(curlx_str_casecompare(&name, "domain")) {
+          if(curlx_strlen(&val) &&
+             !parse_domain(data, co, &cookie[COOKIE_DOMAIN], &val, &domain))
+            return CURLE_OK;
+        }
+        else if(curlx_str_casecompare(&name, "max-age") && curlx_strlen(&val))
+          parse_maxage(co, &val, &now);
+        else if(curlx_str_casecompare(&name, "expires") && curlx_strlen(&val))
+          parse_expires(co, &val, &now);
       }
-      else if(curlx_str_casecompare(&name, "max-age") && curlx_strlen(&val))
-        parse_maxage(co, &val, &now);
-      else if(curlx_str_casecompare(&name, "expires") && curlx_strlen(&val))
-        parse_expires(co, &val, &now);
     }
   } while(!curlx_str_single(&ptr, ';'));
 
@@ -798,7 +787,7 @@ static CURLcode parse_netscape(struct Cookie *co,
 }
 
 static bool is_public_suffix(struct Curl_easy *data,
-                             const struct Cookie *co,
+                             struct Cookie *co,
                              const char *domain)
 {
 #ifdef USE_LIBPSL
@@ -838,14 +827,20 @@ static bool is_public_suffix(struct Curl_easy *data,
           Curl_strntolower(lcase, domain, dlen);
           lcase[dlen] = 0;
           acceptable = psl_is_cookie_domain_acceptable(psl, lcase, lcookie);
+
+          /* if the cookie is acceptable, but is set for a PSL domain, then it
+             cannot be tailmatching */
+          if(acceptable && co->tailmatch &&
+             curl_strequal(co->domain, domain) &&
+             psl_is_public_suffix(psl, lcookie))
+            co->tailmatch = FALSE;
         }
         else {
-          /* libpsl says localhost is a PSL, we think not */
-          acceptable =
-            curl_strequal(lcookie, "localhost") ||
-            /* note that this PSL function returns the opposite value than
-               psl_is_cookie_domain_acceptable() does */
-            !psl_is_public_suffix(psl, lcookie);
+          bool suffix = psl_is_public_suffix(psl, lcookie);
+          acceptable = TRUE;
+          if(suffix)
+            /* switch off tailmatching when set for a PSL domain */
+            co->tailmatch = FALSE;
         }
         Curl_psl_release(data);
       }
@@ -1011,7 +1006,7 @@ CURLcode Curl_cookie_add(struct Curl_easy *data,
   memset(co, 0, sizeof(comem));
 
   if(flags & COOKIE_HTTPHEADER)
-    result = parse_cookie_header(data, co, ci, &okay,
+    result = parse_cookie_header(data, co, &okay,
                                  lineptr, domain, path, flags & COOKIE_SECURE);
   else
     result = parse_netscape(co, ci, &okay, lineptr, flags & COOKIE_SECURE);
@@ -1021,6 +1016,9 @@ CURLcode Curl_cookie_add(struct Curl_easy *data,
 
   if(co->prefix_secure && !co->secure)
     /* The __Secure- prefix only requires that the cookie be set secure */
+    goto fail;
+
+  if(!(flags & COOKIE_NOPSL) && is_public_suffix(data, co, domain))
     goto fail;
 
   if(co->prefix_host) {
@@ -1042,12 +1040,8 @@ CURLcode Curl_cookie_add(struct Curl_easy *data,
   co->livecookie = ci->running;
   co->creationtime = ++ci->lastct;
 
-
   if(!(flags & COOKIE_NOEXPIRE))
     remove_expired(ci);
-
-  if(!(flags & COOKIE_NOPSL) && is_public_suffix(data, co, domain))
-    goto fail;
 
   /*
    * Now we have parsed the incoming line, we must now check if this supersedes
@@ -1175,7 +1169,9 @@ static CURLcode cookie_load(struct Curl_easy *data, const char *file,
   if(fp) {
     struct dynbuf buf;
     bool eof = FALSE;
-    curlx_dyn_init(&buf, MAX_COOKIE_LINE);
+    /* accept a little longer lines so that a full cookie fits and does not
+       abort the file read */
+    curlx_dyn_init(&buf, MAX_COOKIE_LINE + 48);
     do {
       result = Curl_get_line(&buf, fp, &eof);
       if(!result) {
@@ -1192,8 +1188,9 @@ static CURLcode cookie_load(struct Curl_easy *data, const char *file,
                                  (headerline ? COOKIE_HTTPHEADER : 0) |
                                  COOKIE_NOEXPIRE | COOKIE_SECURE |
                                  (flags & COOKIE_NOPSL));
-        /* File reading cookie failures are not propagated back to the
-           caller because there is no way to do that */
+        /* Ignore individual cookie problems unless we ran out of memory */
+        if(result != CURLE_OUT_OF_MEMORY)
+          result = CURLE_OK;
       }
     } while(!result && !eof);
     curlx_dyn_free(&buf); /* free the line buffer */

@@ -224,9 +224,10 @@ static const char * const disabled[] = {
   ,
 
   "win32-ca-searchpath: "
-#if !defined(_WIN32) ||                                                 \
-  (defined(CURL_WINDOWS_UWP) ||                                         \
-   defined(CURL_DISABLE_CA_SEARCH) || defined(CURL_CA_SEARCH_SAFE))
+#if !defined(_WIN32) ||               \
+  (defined(CURL_WINDOWS_UWP) ||       \
+   defined(CURL_DISABLE_CA_SEARCH) || \
+   defined(CURL_CA_SEARCH_SAFE))
   "OFF"
 #else
   "ON"
@@ -270,12 +271,9 @@ static const char * const disabled[] = {
 #endif
 };
 
-int main(int argc, const char *argv[])
+int main(void)
 {
   size_t i;
-
-  (void)argc;
-  (void)argv;
 
   for(i = 0; i < CURL_ARRAYSIZE(disabled); i++)
     puts(disabled[i]);

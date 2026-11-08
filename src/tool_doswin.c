@@ -272,6 +272,40 @@ static SANITIZEcode msdosify(char ** const sanitized, const char *file_name,
 }
 #endif /* MSDOS */
 
+/* return the number of bytes of the reserved prefix, zero if none exists */
+static int prefix_reserved(const char *p)
+{
+  if(curl_strnequal(p, "COM", 3) || curl_strnequal(p, "LPT", 3)) {
+    const uint8_t *up = (const uint8_t *)p;
+    uint8_t super;
+    int len;
+    if(('1' <= p[3]) && (p[3] <= '9'))
+      return 4;
+
+    /* to complicate things, Windows considers superscript 1, 2, 3 to be valid
+       numbers and they can be provided in ISO8859-1 or UTF-8. Avoid either
+       version. */
+    len = (up[3] == 0xc2) ? /* UTF-8 */ 4 : 3;
+    super = up[len];
+
+    switch(super) {
+    case 0xb9: /* superscript '1' */
+    case 0xb2: /* superscript '2' */
+    case 0xb3: /* superscript '3' */
+      return len + 1;
+    }
+    return 0;
+  }
+  else if(curl_strnequal(p, "CON", 3) ||
+          curl_strnequal(p, "PRN", 3) ||
+          curl_strnequal(p, "AUX", 3) ||
+          curl_strnequal(p, "NUL", 3))
+    return 3;
+  else if(curl_strnequal(p, "CLOCK$", 6))
+    return 6;
+  return 0;
+}
+
 /*
  * Rename file_name if it is a reserved dos device name.
  *
@@ -334,13 +368,7 @@ static SANITIZEcode rename_if_reserved_dos(char ** const sanitized,
    */
   for(p = buffer; p; p = (p == buffer && buffer != base ? base : NULL)) {
     size_t p_len;
-    int x = (curl_strnequal(p, "CON", 3) ||
-             curl_strnequal(p, "PRN", 3) ||
-             curl_strnequal(p, "AUX", 3) ||
-             curl_strnequal(p, "NUL", 3)) ? 3 :
-            (curl_strnequal(p, "CLOCK$", 6)) ? 6 :
-            (curl_strnequal(p, "COM", 3) || curl_strnequal(p, "LPT", 3)) ?
-              (('1' <= p[3] && p[3] <= '9') ? 4 : 3) : 0;
+    int x = prefix_reserved(p);
 
     if(!x)
       continue;
@@ -740,6 +768,12 @@ static DWORD WINAPI win_stdin_thread_func(void *thread_data)
     ssize_t nwritten;
     char buffer[BUFSIZ];
 
+    /* If stdin is a pipe then end-of-data signaling may differ depending on
+       how curl was built, the shell and the input. Two ways have been
+       observed:
+       - ReadFile fails with GetLastError ERROR_BROKEN_PIPE
+       - ReadFile succeeds with 0 bytes read (seen on mingw) */
+
     if(!ReadFile(tdata.stdin_handle, buffer, sizeof(buffer), &n, NULL))
       break;
     if(n == 0)
@@ -749,6 +783,19 @@ static DWORD WINAPI win_stdin_thread_func(void *thread_data)
       break;
     if((DWORD)nwritten != n)
       break;
+  }
+
+  /* wait for all data to be received by the main thread:
+     shut down the write side of our socket so that a FIN is sent "after all
+     data is sent and acknowledged by the receiver". recv is called to wait for
+     this to happen. the wait time includes time of up to 2 min (OS typical)
+     since it's possible the receiver will not reply to the FIN.
+     */
+  if(shutdown(tdata.socket_w, SHUT_WR) == 0) {
+    char buf[1024];
+    /* read until close or error while ignoring all incoming */
+    while(sread(tdata.socket_w, buf, sizeof(buf)) > 0)
+      ;
   }
 
   cleanup_tdata_sync();
@@ -880,9 +927,6 @@ curl_socket_t win32_stdin_read_thread(void)
       break;
     }
 
-    /* Hard close the socket on closesocket() */
-    setsockopt(socket_r, SOL_SOCKET, SO_DONTLINGER, 0, 0);
-
     /* Make the reading socket nonblocking */
     if(curlx_nonblock(socket_r, TRUE)) {
       errorf("curlx_nonblock() error");
@@ -927,16 +971,6 @@ curl_socket_t win32_stdin_read_thread(void)
 
     if(recvd_val != auth_rnd) {
       errorf("relay peer auth failed");
-      break;
-    }
-
-    if(shutdown(tdata.socket_w, SHUT_RD)) {
-      errorf("shutdown error: %d", SOCKERRNO);
-      break;
-    }
-
-    if(shutdown(socket_r, SHUT_WR)) {
-      errorf("shutdown error: %d", SOCKERRNO);
       break;
     }
 

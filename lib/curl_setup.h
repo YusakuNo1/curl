@@ -77,7 +77,7 @@
 
 #if defined(__MINGW32__) && \
   (!defined(__MINGW64_VERSION_MAJOR) || (__MINGW64_VERSION_MAJOR < 3))
-#error "Building curl requires mingw-w64 3.0 or later"
+#error "mingw-w64 3.0 or greater required"
 #endif
 
 /* Visual Studio 2010 is the minimum Visual Studio version we support.
@@ -123,11 +123,6 @@
 #undef SECURITY_KERNEL
 #undef SECURITY_WIN32
 #define SECURITY_WIN32  /* for <sspi.h> */
-#endif
-
-/* Compatibility */
-#ifdef ENABLE_IPV6
-#define USE_IPV6 1
 #endif
 
 /*
@@ -178,7 +173,7 @@
 
 #ifdef HAVE_LIBZ
 #  ifndef ZLIB_CONST
-#  define ZLIB_CONST  /* Use z_const. Supported by v1.2.5.2 and upper. */
+#  define ZLIB_CONST  /* Use z_const. Supported by v1.2.5.2 or greater. */
 #  endif
 #endif
 
@@ -221,69 +216,14 @@
 #endif
 
 /*
- * Disable other protocols when http is the only one desired.
- */
-#ifdef HTTP_ONLY
-#  ifndef CURL_DISABLE_DICT
-#  define CURL_DISABLE_DICT
-#  endif
-#  ifndef CURL_DISABLE_FILE
-#  define CURL_DISABLE_FILE
-#  endif
-#  ifndef CURL_DISABLE_FTP
-#  define CURL_DISABLE_FTP
-#  endif
-#  ifndef CURL_DISABLE_GOPHER
-#  define CURL_DISABLE_GOPHER
-#  endif
-#  ifndef CURL_DISABLE_IMAP
-#  define CURL_DISABLE_IMAP
-#  endif
-#  ifndef CURL_DISABLE_LDAP
-#  define CURL_DISABLE_LDAP
-#  endif
-#  ifndef CURL_DISABLE_LDAPS
-#  define CURL_DISABLE_LDAPS
-#  endif
-#  ifndef CURL_DISABLE_MQTT
-#  define CURL_DISABLE_MQTT
-#  endif
-#  ifndef CURL_DISABLE_POP3
-#  define CURL_DISABLE_POP3
-#  endif
-#  ifndef CURL_DISABLE_RTSP
-#  define CURL_DISABLE_RTSP
-#  endif
-#  ifndef CURL_DISABLE_SMTP
-#  define CURL_DISABLE_SMTP
-#  endif
-#  ifndef CURL_DISABLE_TELNET
-#  define CURL_DISABLE_TELNET
-#  endif
-#  ifndef CURL_DISABLE_TFTP
-#  define CURL_DISABLE_TFTP
-#  endif
-#  ifndef CURL_DISABLE_WEBSOCKETS
-#  define CURL_DISABLE_WEBSOCKETS
-#  endif
-#endif
-
-/*
- * When http is disabled rtsp is not supported.
- */
-#if defined(CURL_DISABLE_HTTP) && !defined(CURL_DISABLE_RTSP)
-#  define CURL_DISABLE_RTSP
-#endif
-
-/*
  * When HTTP is disabled, disable HTTP-only features
  */
 #ifdef CURL_DISABLE_HTTP
 #  ifndef CURL_DISABLE_ALTSVC
 #  define CURL_DISABLE_ALTSVC
 #  endif
-#  ifndef CURL_DISABLE_COOKIES
-#  define CURL_DISABLE_COOKIES
+#  ifndef CURL_DISABLE_AWS
+#  define CURL_DISABLE_AWS
 #  endif
 #  ifndef CURL_DISABLE_BASIC_AUTH
 #  define CURL_DISABLE_BASIC_AUTH
@@ -291,11 +231,8 @@
 #  ifndef CURL_DISABLE_BEARER_AUTH
 #  define CURL_DISABLE_BEARER_AUTH
 #  endif
-#  ifndef CURL_DISABLE_AWS
-#  define CURL_DISABLE_AWS
-#  endif
-#  ifndef CURL_DISABLE_HTTPSIG
-#  define CURL_DISABLE_HTTPSIG
+#  ifndef CURL_DISABLE_COOKIES
+#  define CURL_DISABLE_COOKIES
 #  endif
 #  ifndef CURL_DISABLE_DOH
 #  define CURL_DISABLE_DOH
@@ -309,8 +246,14 @@
 #  ifndef CURL_DISABLE_HSTS
 #  define CURL_DISABLE_HSTS
 #  endif
+#  ifndef CURL_DISABLE_HTTPSIG
+#  define CURL_DISABLE_HTTPSIG
+#  endif
 #  ifndef CURL_DISABLE_HTTP_AUTH
 #  define CURL_DISABLE_HTTP_AUTH
+#  endif
+#  ifndef CURL_DISABLE_RTSP
+#  define CURL_DISABLE_RTSP
 #  endif
 #  ifndef CURL_DISABLE_WEBSOCKETS
 #  define CURL_DISABLE_WEBSOCKETS /* no WebSockets without HTTP present */
@@ -344,6 +287,30 @@
 #endif
 
 #include <curl/system.h>
+
+#if !defined(HAVE_PIPE2) && \
+  ((defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && \
+            __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000 && \
+    defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && \
+            __MAC_OS_X_VERSION_MIN_REQUIRED >= 270000) || \
+   (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && \
+            __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000 && \
+    defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && \
+            __IPHONE_OS_VERSION_MIN_REQUIRED >= 270000) || \
+   (defined(__TV_OS_VERSION_MAX_ALLOWED) && \
+            __TV_OS_VERSION_MAX_ALLOWED >= 270000 && \
+    defined(__TV_OS_VERSION_MIN_REQUIRED) && \
+            __TV_OS_VERSION_MIN_REQUIRED >= 270000) || \
+   (defined(__WATCH_OS_VERSION_MAX_ALLOWED) && \
+            __WATCH_OS_VERSION_MAX_ALLOWED >= 270000 && \
+    defined(__WATCH_OS_VERSION_MIN_REQUIRED) && \
+            __WATCH_OS_VERSION_MIN_REQUIRED >= 270000) || \
+   (defined(__VISION_OS_VERSION_MAX_ALLOWED) && \
+            __VISION_OS_VERSION_MAX_ALLOWED >= 270000 && \
+    defined(__VISION_OS_VERSION_MIN_REQUIRED) && \
+            __VISION_OS_VERSION_MIN_REQUIRED >= 270000))
+#define HAVE_PIPE2
+#endif
 
 /* Helper macro to expand and concatenate two macros.
  * Direct macros concatenation does not work because macros
@@ -1111,7 +1078,7 @@ typedef unsigned int curl_bit;
 #define SOCKEISCONN       WSAEISCONN
 #define SOCKEMSGSIZE      WSAEMSGSIZE
 /* Use literal value to work around clang-tidy <=20 misreporting
-  'readability-uppercase-literal-suffix' with mingw-w64 headers */
+   'readability-uppercase-literal-suffix' with mingw-w64 headers */
 #define SOCKENOMEM        8L  /* WSA_NOT_ENOUGH_MEMORY */
 #define SOCKETIMEDOUT     WSAETIMEDOUT
 #define SOCKEWOULDBLOCK   WSAEWOULDBLOCK
@@ -1570,8 +1537,8 @@ typedef struct sockaddr_un {
 /* OpenSSL 3 marks these functions deprecated but we have no replacements (yet)
    so tell the compiler to not warn for them:
    - DES_* (for NTLM)
-   - EVP_PKEY_get1_RSA, MD5_*, RSA_flags, RSA_free (auto-skipped for OpenSSL
-     built with no-deprecated) */
+   - EVP_PKEY_get1_RSA, RSA_flags, RSA_free (auto-skipped for OpenSSL built
+     with no-deprecated) */
 #  define OPENSSL_SUPPRESS_DEPRECATED
 #  ifdef _WIN32
 /* Silence LibreSSL warnings about wincrypt.h collision. Works in 3.8.2+ */
@@ -1625,6 +1592,12 @@ typedef struct sockaddr_un {
                            __NetBSD_Version__ */
 #endif
 
+/* NetBSD before 6.1 did not set SS_NBIO for SOCK_NONBLOCK. */
+#if defined(SOCK_NONBLOCK) && \
+  (!defined(__NetBSD__) || (__NetBSD_Version__ >= 601000000))
+#define CURL_USE_SOCK_NONBLOCK
+#endif
+
 #ifndef _CURL_LOCAL_MEMZERO /* to be removed after a couple of releases */
 #ifdef _WIN32
 #if defined(_MSC_VER) && defined(NTDDI_VERSION) && \
@@ -1642,11 +1615,11 @@ typedef struct sockaddr_un {
   (defined(__NEWLIB__) && !defined(__CLIB2__)) || \
   (defined(__GLIBC__) && \
     (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25))) || \
-  (defined(__DragonFly__) && __DragonFly_version >= 500600 /* v5.6+ */) || \
-  (defined(__FreeBSD__) && __FreeBSD_version >= 1100037 /* v11.0+ */) || \
-  (defined(__OpenBSD__) && OpenBSD >= 201405 /* v5.5+ */)
+  (defined(__DragonFly__) && __DragonFly_version >= 500600 /* 5.6+ */) || \
+  (defined(__FreeBSD__) && __FreeBSD_version >= 1100037 /* 11.0+ */) || \
+  (defined(__OpenBSD__) && OpenBSD >= 201405 /* 5.5+ */)
 #define curlx_memzero_low(buf, size)  explicit_bzero(buf, size)
-#elif defined(__NetBSD__) && __NetBSD_Version__ >= 702000000 /* v7.2+ */
+#elif defined(__NetBSD__) && __NetBSD_Version__ >= 702000000 /* 7.2+ */
 #define curlx_memzero_low(buf, size)  (void)explicit_memset(buf, 0, size)
 #endif
 #endif /* !_CURL_LOCAL_MEMZERO */

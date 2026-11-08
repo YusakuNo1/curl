@@ -106,40 +106,40 @@ class Card:
 
     @classmethod
     def mk_mbs_cell(cls, samples, profiles, errors):
-        val = mean(samples) if len(samples) else -1
+        val = mean(samples) if samples else -1
         cell = {
             'val': val,
             'sval': Card.fmt_mbs(val) if val >= 0 else '--',
         }
-        if len(profiles):
+        if profiles:
             cell['stats'] = RunProfile.AverageStats(profiles)
-        if len(errors):
+        if errors:
             cell['errors'] = errors
         return cell
 
     @classmethod
     def mk_speed_cell(cls, samples, profiles, errors, limit):
-        val = mean(samples) if len(samples) else -1
+        val = mean(samples) if samples else -1
         cell = {
             'val': val,
             'sval': Card.fmt_speed_result(val, limit) if val >= 0 else '--',
         }
-        if len(profiles):
+        if profiles:
             cell['stats'] = RunProfile.AverageStats(profiles)
-        if len(errors):
+        if errors:
             cell['errors'] = errors
         return cell
 
     @classmethod
     def mk_reqs_cell(cls, samples, profiles, errors):
-        val = mean(samples) if len(samples) else -1
+        val = mean(samples) if samples else -1
         cell = {
             'val': val,
             'sval': Card.fmt_reqs(val) if val >= 0 else '--',
         }
-        if len(profiles):
+        if profiles:
             cell['stats'] = RunProfile.AverageStats(profiles)
-        if len(errors):
+        if errors:
             cell['errors'] = errors
         return cell
 
@@ -196,7 +196,7 @@ class Card:
         errors = []
         col_has_stats = []
         for idx, col in enumerate(cols):
-            cellw = max([len(r[idx]["sval"]) for r in rows])
+            cellw = max(len(r[idx]["sval"]) for r in rows)
             colw.append(max(cellw, len(col)))
             col_has_stats.append(False)
             for row in rows:
@@ -224,7 +224,7 @@ class Card:
                 if 'errors' in cell:
                     errors.extend(cell['errors'])
             print()
-        if len(errors):
+        if errors:
             print(f'Errors: {errors}')
 
 
@@ -314,9 +314,9 @@ class ScoreRunner:
                     else:
                         errors.append(f'exit={r.exit_code}')
                     props[authority][f'{ipv}-connect'] = mean(c_samples) \
-                        if len(c_samples) else -1
+                        if c_samples else -1
                     props[authority][f'{ipv}-handshake'] = mean(hs_samples) \
-                        if len(hs_samples) else -1
+                        if hs_samples else -1
                     props[authority][f'{ipv}-errors'] = errors
             self.info('ok.\n')
         return props
@@ -369,11 +369,11 @@ class ScoreRunner:
             if err:
                 errors.append(err)
             elif self._limit_rate:
-                total_speed = sum([s['speed_download'] for s in r.stats])
+                total_speed = sum(s['speed_download'] for s in r.stats)
                 samples.append(total_speed / len(r.stats))
                 profiles.append(r.profile)
             else:
-                total_size = sum([s['size_download'] for s in r.stats])
+                total_size = sum(s['size_download'] for s in r.stats)
                 samples.append(total_size / r.duration.total_seconds())
                 profiles.append(r.profile)
         if self._limit_rate:
@@ -397,11 +397,11 @@ class ScoreRunner:
             if err:
                 errors.append(err)
             elif self._limit_rate:
-                total_speed = sum([s['speed_download'] for s in r.stats])
+                total_speed = sum(s['speed_download'] for s in r.stats)
                 samples.append(total_speed / len(r.stats))
                 profiles.append(r.profile)
             else:
-                total_size = sum([s['size_download'] for s in r.stats])
+                total_size = sum(s['size_download'] for s in r.stats)
                 samples.append(total_size / r.duration.total_seconds())
                 profiles.append(r.profile)
         if self._limit_rate:
@@ -430,11 +430,11 @@ class ScoreRunner:
             if err:
                 errors.append(err)
             elif self._limit_rate:
-                total_speed = sum([s['speed_download'] for s in r.stats])
+                total_speed = sum(s['speed_download'] for s in r.stats)
                 samples.append(total_speed / len(r.stats))
                 profiles.append(r.profile)
             else:
-                total_size = sum([s['size_download'] for s in r.stats])
+                total_size = sum(s['size_download'] for s in r.stats)
                 samples.append(total_size / r.duration.total_seconds())
                 profiles.append(r.profile)
         if self._limit_rate:
@@ -513,7 +513,7 @@ class ScoreRunner:
             if err:
                 errors.append(err)
             else:
-                total_size = sum([s['size_upload'] for s in r.stats])
+                total_size = sum(s['size_upload'] for s in r.stats)
                 samples.append(total_size / r.duration.total_seconds())
                 profiles.append(r.profile)
         return Card.mk_mbs_cell(samples, profiles, errors)
@@ -533,7 +533,7 @@ class ScoreRunner:
             if err:
                 errors.append(err)
             else:
-                total_size = sum([s['size_upload'] for s in r.stats])
+                total_size = sum(s['size_upload'] for s in r.stats)
                 samples.append(total_size / r.duration.total_seconds())
                 profiles.append(r.profile)
         return Card.mk_mbs_cell(samples, profiles, errors)
@@ -558,7 +558,7 @@ class ScoreRunner:
             if err:
                 errors.append(err)
             else:
-                total_size = sum([s['size_upload'] for s in r.stats])
+                total_size = sum(s['size_upload'] for s in r.stats)
                 samples.append(total_size / r.duration.total_seconds())
                 profiles.append(r.profile)
         return Card.mk_mbs_cell(samples, profiles, errors)
@@ -652,7 +652,7 @@ class ScoreRunner:
                     'sval': Card.fmt_size(fsize)
                 }, {
                     'val': count,
-                        'sval': f'{count}',
+                    'sval': f'{count}',
                 }
         ]
         self.info('requests, max parallel...')

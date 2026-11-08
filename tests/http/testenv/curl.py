@@ -55,9 +55,9 @@ class RunProfile:
         stats = [p.stats for p in profiles]
         for key in cls.STAT_KEYS:
             vals = [s[key] for s in stats]
-            avg[key] = mean(vals) if len(vals) else 0.0
+            avg[key] = mean(vals) if vals else 0.0
         vals = [s['rss-max'] for s in [p.stats for p in profiles]]
-        avg['rss-max'] = mean(vals) if len(vals) else 0
+        avg['rss-max'] = mean(vals) if vals else 0
         return avg
 
     def __init__(self, pid: int, started_at: datetime, run_dir):
@@ -100,7 +100,7 @@ class RunProfile:
             self._stats = {}
             for key in self.STAT_KEYS:
                 self._stats[key] = fmean([s[key] for s in self._samples], weights)
-            self._stats['rss-max'] = max([s['rss'] for s in self._samples])
+            self._stats['rss-max'] = max(s['rss'] for s in self._samples)
         else:
             self._stats = None
         self._psu = None
@@ -380,7 +380,7 @@ class ExecResult:
 
     @property
     def total_connects(self) -> Optional[int]:
-        if len(self.stats):
+        if self.stats:
             n = 0
             for stat in self.stats:
                 n += stat['num_connects']
@@ -629,9 +629,9 @@ class CurlClient:
                  force_resolv: bool = True,
                  socks_args: Optional[List[str]] = None):
         self.env = env
-        self._timeout = timeout if timeout else env.test_timeout
+        self._timeout = timeout or env.test_timeout
         self._curl = os.environ.get('CURL', env.curl)
-        self._run_dir = run_dir if run_dir else os.path.join(env.gen_dir, 'curl')
+        self._run_dir = run_dir or os.path.join(env.gen_dir, 'curl')
         self._stdoutfile = f'{self._run_dir}/curl.stdout'
         self._stderrfile = f'{self._run_dir}/curl.stderr'
         self._headerfile = f'{self._run_dir}/curl.headers'
@@ -655,7 +655,7 @@ class CurlClient:
         self._socks_args = socks_args
         self._silent = silent
         self._run_env = run_env
-        self._server_addr = server_addr if server_addr else '127.0.0.1'
+        self._server_addr = server_addr or '127.0.0.1'
         self._force_resolv = force_resolv
         self._rmrf(self._run_dir)
         self._mkpath(self._run_dir)
@@ -1171,7 +1171,7 @@ class CurlClient:
 
             if force_resolve and u.hostname and u.hostname != 'localhost' \
                     and not re.match(r'^(\d+|\[|:).*', u.hostname):
-                port = u.port if u.port else 443
+                port = u.port or 443
                 args.extend([
                     '--resolve', f'{u.hostname}:{port}:{self._server_addr}',
                 ])

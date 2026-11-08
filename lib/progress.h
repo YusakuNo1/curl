@@ -45,7 +45,7 @@ typedef enum {
 /* Get the current timestamp of the transfer */
 const struct curltime *Curl_pgrs_now(struct Curl_easy *data);
 
-int Curl_pgrsDone(struct Curl_easy *data);
+int Curl_pgrsDone(struct Curl_easy *data, const struct curltime *pnow);
 void Curl_pgrsStart(struct Curl_easy *data, const struct curltime *pnow);
 void Curl_pgrsSetDownloadSize(struct Curl_easy *data, curl_off_t size);
 void Curl_pgrsSetUploadSize(struct Curl_easy *data, curl_off_t size);
@@ -57,10 +57,12 @@ void Curl_pgrsSetUploadCounter(struct Curl_easy *data, curl_off_t size);
 
 /* perform progress update, invoking callbacks at intervals */
 CURLcode Curl_pgrsUpdate(struct Curl_easy *data);
+CURLcode Curl_pgrsUpdateX(struct Curl_easy *data, const struct curltime *pnow);
 /* perform progress update, no callbacks invoked */
 void Curl_pgrsUpdate_nometer(struct Curl_easy *data);
 /* perform progress update with callbacks and speed checks */
 CURLcode Curl_pgrsCheck(struct Curl_easy *data);
+CURLcode Curl_pgrsCheckX(struct Curl_easy *data, const struct curltime *pnow);
 
 /* Inform progress/speedcheck about receive/send pausing */
 void Curl_pgrsRecvPause(struct Curl_easy *data, bool enable);

@@ -224,8 +224,8 @@ Building for Windows Vista/Server 2008 is required as a minimum.
 
 You can build curl with:
 
-- Microsoft Visual Studio 2010 v10.0 or later (`_MSC_VER >= 1600`)
-- MinGW-w64 3.0 or later (`__MINGW64_VERSION_MAJOR >= 3`)
+- Microsoft Visual Studio 2010 10.0 or greater (`_MSC_VER >= 1600`)
+- mingw-w64 3.0 or greater (`__MINGW64_VERSION_MAJOR >= 3`)
 
 ## Building Windows DLLs and C runtime (CRT) linkage issues
 
@@ -352,7 +352,7 @@ cmake . \
 
 Notes:
 
-- Requires DJGPP 2.04 or upper.
+- Requires DJGPP 2.04 or greater.
 
 - Compile Watt-32 (and OpenSSL) with the same version of DJGPP. Otherwise
   things go wrong because things like FS-extensions and `errno` values have
@@ -504,8 +504,8 @@ install `libssl.a` and `libcrypto.a` to `$TOOLCHAIN/sysroot/usr/lib` and copy
 for Android using OpenSSL like this:
 
 ```sh
-# For BoringSSL/OpenSSL. In general, you need to the SSL/TLS layer's transitive
-# dependencies if you are linking statically.
+# For AWS-LC/BoringSSL/OpenSSL. In general, you need to the SSL/TLS layer's
+# transitive dependencies if you are linking statically.
 LIBS='-lssl -lcrypto -lc++'
 ./configure --host aarch64-linux-android --with-pic --disable-shared --with-openssl="$TOOLCHAIN/sysroot/usr"
 ```

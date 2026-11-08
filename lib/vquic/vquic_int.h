@@ -28,6 +28,7 @@
 #ifdef USE_HTTP3
 
 #include "bufq.h"
+#include "u32_ptrset.h"
 
 #define MAX_UDP_PAYLOAD_SIZE  1452
 
@@ -78,7 +79,7 @@ struct cf_quic_ctx {
 };
 
 #define H3_STREAM_CTX(ctx, data)                                        \
-  ((data) ? Curl_uint32_hash_get(&(ctx)->streams, (data)->mid) : NULL)
+  ((data) ? Curl_u32_ptrset_get(&(ctx)->streams, (data)->mid) : NULL)
 
 CURLcode Curl_vquic_ctx_init(struct Curl_easy *data,
                              struct cf_quic_ctx *qctx);
@@ -105,7 +106,7 @@ typedef CURLcode Curl_vquic_recv_pkts_cb(const unsigned char *buf,
                                          size_t buflen,
                                          size_t gso_size,
                                          struct sockaddr_storage *remote_addr,
-                                         socklen_t remote_addrlen, int ecn,
+                                         socklen_t remote_addrlen, uint8_t ecn,
                                          void *userp);
 
 CURLcode Curl_vquic_recv_packets(struct Curl_cfilter *cf,
